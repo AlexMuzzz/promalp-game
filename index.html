@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#132c30">
+  <meta name="description" content="Мой окна, уворачивайся от чаек и кирпичей, сдавай объекты и улучшай снаряжение. Промальп: Стекломой — маленькая игра о большой высоте.">
+  <title>Промальп · Стекломой</title>
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./style.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script type="module" src="./game.js"></script>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="Промальп — главный экран"><span class="brand-icon">П</span><span>ПРОМАЛЬП<small>СТЕКЛОМОЙ</small></span></a>
+      <div class="wallet"><span>В КОШЕЛЬКЕ</span><strong id="balance">$0</strong></div>
+      <button class="icon-button" id="pause" aria-label="Пауза" disabled>Ⅱ</button>
+    </header>
+    <section class="game-shell" aria-label="Игровая площадка">
+      <canvas id="game" aria-label="Фасад здания. Удерживайте палец или мышь и водите по окнам, чтобы нанести пену. Отпустите, чтобы смыть её."></canvas>
+      <div class="run-hud" id="run-hud" hidden>
+        <div><span class="eyebrow">ОБЪЕКТ 01 · ТИХИЙ ДВОР</span><strong id="floor">Этаж 6 / 6</strong></div>
+        <div class="run-money"><span>Намыто за спуск</span><strong id="earned">$0</strong></div>
+      </div>
+      <div class="floor-progress" id="floor-progress" hidden aria-label="Прогресс объекта"></div>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+      <div class="hint" id="hint" hidden>Води по стеклу → отпусти, когда будет 100%</div>
+      <div class="overlay" id="overlay">
+        <section class="panel" id="panel" role="dialog" aria-modal="true" aria-labelledby="panel-title"></section>
+      </div>
+    </section>
+    <footer class="equipment" aria-label="Снаряжение">
+      <div><span class="equipment-icon">⌁</span><span><small>ВЕРЁВКА</small><strong id="rope">20 / 20</strong></span></div>
+      <div><span class="equipment-icon">◒</span><span><small>КАСКА</small><strong id="helmet">Уровень 1</strong></span></div>
+      <div><span class="equipment-icon">⊤</span><span><small>СКЛИЗ</small><strong id="squeegee">Уровень 1</strong></span></div>
+    </footer>
+    <p class="storage-label" id="storage-label">Подключаем сохранения…</p>
+  </main>
+  <noscript>Для игры необходимо включить JavaScript.</noscript>
+</body>
+</html>
