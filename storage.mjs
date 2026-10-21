@@ -1,4 +1,4 @@
-import { parseSave } from './core.mjs';
+import { parseSave } from './core.mjs?v=2';
 
 export function createStorage(tg, local, timeout = 10000) {
   // Never redirect a Telegram user's failed cloud operation into browser storage.

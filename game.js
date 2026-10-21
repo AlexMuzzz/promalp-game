@@ -1,26 +1,32 @@
-import { RULES, DEFAULT_SAVE, priceFor, purchase, descend, deposit, createFoam, paintFoam } from './core.mjs';
-import { createStorage } from './storage.mjs';
+import { createAudio } from './audio.mjs?v=2';
+import { drawClimber } from './avatar.mjs?v=2';
+import { RULES, DEFAULT_SAVE, priceFor, purchase, descend, deposit, createFoam, paintFoam, SKINS, buySkin, equipSkin, windowReward } from './core.mjs?v=2';
+import { createStorage } from './storage.mjs?v=2';
 
 const $ = id => document.getElementById(id);
 const canvas = $('game');
 const ctx = canvas.getContext('2d');
 const tg = window.Telegram?.WebApp;
+const sound = createAudio({preferences:{getItem:key=>localStorage.getItem(key),setItem:(key,value)=>localStorage.setItem(key,value)}});
 const storage = createStorage(tg, { getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) });
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 let save = { ...DEFAULT_SAVE };
 let state = 'loading', previousState = 'playing';
 let W = 400, H = 600, scale = 1;
 let floorIndex = 0, earned = 0, helmetHits = 1, camera = 0;
-let panes = [], hazards = [], sparks = [];
+let panes = [], floorHistory = [], hazards = [];
+let previewSkin = 'worker';
+const controlHint = '← Води влево-вправо · спуск и мытьё автоматически →';
 let pointer = null, target = { x: 200, y: 180 }, player = { ...target };
-let nextHazard = 6, invulnerable = 0, transition = 0, fallTime = 0, time = 0;
+let nextHazard = 6, invulnerable = 0, fallTime = 0, time = 0;
 let toastUntil = 0, lastFrame = 0, focusBeforeModal;
 let shopOrigin = 'home';
 const money = value => `$${value}`;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const windowHeight = () => Math.min(205, H * .34);
 const stride = () => windowHeight() + 110;
-const windowTop = () => Math.max(155, H * .32);
+const playerLine = () => H * .40;
+const windowTop = () => playerLine() + 60;
 
 try {
   tg?.ready(); tg?.expand();
@@ -41,9 +47,10 @@ function updateHUD() {
   $('earned').textContent = money(earned);
   $('floor').textContent = `Этаж ${Math.max(1, 6 - floorIndex)} / 6`;
   $('rope').textContent = `${save.ropeDurability} / 20${save.ropes === 2 ? ' + страховка' : ''}`;
-  $('helmet').textContent = ['playing', 'wiping', 'descending', 'paused', 'saving'].includes(state) ? `${helmetHits} из ${save.helmetLevel} ударов` : `Уровень ${save.helmetLevel}`;
+  $('helmet').textContent = ['playing', 'paused', 'saving'].includes(state) ? `${helmetHits} из ${save.helmetLevel} ударов` : `Уровень ${save.helmetLevel}`;
   $('squeegee').textContent = `Уровень ${save.squeegeeLevel}`;
-  $('pause').disabled = !['playing', 'wiping', 'paused'].includes(state);
+  $('profile-button').disabled = !['home', 'shop', 'profile'].includes(state);
+  $('pause').disabled = !['playing', 'paused'].includes(state);
   $('pause').textContent = state === 'paused' ? '▶' : 'Ⅱ';
   $('floor-progress').innerHTML = Array.from({ length: 6 }, (_, i) => `<i class="${i < floorIndex ? 'done' : i === floorIndex ? 'active' : ''}"></i>`).join('');
 }
@@ -59,40 +66,41 @@ function closeModal() {
   $('overlay').hidden = true;
   focusBeforeModal?.focus?.({ preventScroll: true });
 }
-function action(id, fn) { $(id).addEventListener('click', fn); }
+function action(id, fn) { $(id).addEventListener('click', event => { if (id !== 'sound-button') sound.unlock(); fn(event); }); }
 function home() {
-  state = 'home'; floorIndex = 0; camera = 0; hazards = []; earned = 0;
+  state = 'home'; floorIndex = 0; camera = 0; hazards = []; floorHistory = []; panes = []; earned = 0;
   player = { x: 290, y: H * .22 }; target = { ...player };
   $('run-hud').hidden = true; $('floor-progress').hidden = true; $('hint').hidden = true;
   updateHUD();
   modal(`<span class="kicker">Работа на высоте</span>
     <h1 id="panel-title">Чистая работа.<br><em>На высоте.</em></h1>
-    <p class="intro">Намывай стёкла, береги каску и не доверяй чайкам. Город сам себя не отмоет.</p>
-    <div class="mission"><span><b>6</b>этажей</span><span><b>18</b>окон</span><span><b>$180</b>за объект</span></div>
+    <p class="intro">Спускайся на верёвке, мой окна на ходу и лавируй между опасностями.</p>
+    <div class="mission"><span><b>6</b>этажей</span><span><b>18</b>окон</span><span><b>до $180</b>за объект</span></div>
     <button class="primary" id="start">На крышу <span aria-hidden="true">↗</span></button>
-    <button class="secondary" id="shop">Снаряжение</button>
+    <div class="home-actions"><button class="secondary" id="profile">Мой альпинист</button><button class="secondary" id="shop">Снаряжение</button></div>
     <button class="text-button" id="help">Как здесь работать?</button>
     <p class="meta-line">ТИХИЙ ДВОР · ОБЪЕКТ № 01</p>`, 'hero');
-  action('start', startRun); action('shop', () => showShop('home')); action('help', instructions);
+  action('profile', () => showProfile()); action('start', startRun); action('shop', () => showShop('home')); action('help', instructions);
 }
 function instructions() {
-  modal(`<span class="kicker">Инструктаж перед сменой</span><h2 id="panel-title">Держись крепче</h2>
-    <ol class="steps"><li><b>Наведи чистоту</b>Зажми палец или мышь и закрась пеной всё стекло. На 100% отпусти — склиз сделает остальное.</li>
-    <li><b>Смотри наверх</b>Метка «!» предупреждает об опасности. Уведи альпиниста в сторону. Каска принимает удар, без каски — падение.</li>
-    <li><b>Дойди до земли</b>Три чистых окна — спуск на этаж. Верёвка теряет 1 прочность; риск обрыва — 2% за переход. На нуле она рвётся.</li>
-    <li><b>Сдай объект</b>Намытые $180 станут твоими только после сдачи. При падении заработок за попытку сгорает.</li></ol>
-    <button class="primary" id="understood">Понятно, на крышу</button><button class="text-button" id="back">Назад</button>`);
+  modal(`<span class="kicker">Новый способ работать</span><h2 id="panel-title">Вниз по верёвке</h2>
+    <ol class="steps"><li><b>Спуск идёт сам</b>Фасад движется вверх, альпинист плавно спускается. Останавливаться у каждого окна больше не нужно.</li>
+    <li><b>Рули влево-вправо</b>Зажми палец или мышь в любом месте поля и двигай в стороны. Склиз сам оставляет чистую полосу. На клавиатуре — стрелки или A / D.</li>
+    <li><b>Успей побольше</b>Мой несколько окон, пока проходишь этаж. За каждое — до $10, пропорционально очищенной площади. Пропущенное стекло остаётся грязным.</li>
+    <li><b>Береги каску</b>Уклоняйся от кирпичей и чаек. На каждом этаже верёвка изнашивается. Падение сжигает заработок попытки.</li></ol>
+    <button class="primary" id="understood">Погнали вниз ↓</button><button class="text-button" id="back">Назад</button>`);
   action('understood', startRun); action('back', home);
 }
 function createPanes() {
-  panes = Array.from({ length: 3 }, (_, i) => ({ x: 34 + i * 114, y: windowTop(), w: 104, h: windowHeight(), foam: createFoam(), coverage: 0, clean: false, wipe: -1 }));
+  panes = Array.from({ length: 3 }, (_, i) => ({ x: 34 + i * 114, y: windowTop(), w: 104, h: windowHeight(), foam: createFoam(), coverage: 0, clean: false, reward: 0 }));
 }
 function startRun() {
+  heldKeys.clear(); sound.effect('start');
   state = 'playing'; floorIndex = 0; earned = 0; helmetHits = save.helmetLevel;
-  hazards = []; sparks = []; camera = 0; nextHazard = 7; invulnerable = 1.5;
-  createPanes(); player = { x: 205, y: windowTop() - 45 }; target = { ...player };
+  hazards = []; floorHistory = []; camera = 0; nextHazard = 7; invulnerable = 1.5;
+  createPanes(); player = { x: 200, y: playerLine() }; target = { ...player };
   $('run-hud').hidden = false; $('floor-progress').hidden = false; $('hint').hidden = false;
-  $('hint').textContent = 'Води по стеклу → отпусти, когда будет 100%';
+  $('hint').textContent = controlHint;
   closeModal(); updateHUD(); haptic();
   try { if (tg?.isVersionAtLeast('6.2')) tg.enableClosingConfirmation(); } catch { /* optional */ }
 }
@@ -102,24 +110,68 @@ function showShop(origin = shopOrigin) {
     ['rope', 'Свежая верёвка', `Прочность ${save.ropeDurability}/20 → 20/20. Замена основной.`, save.ropeDurability === 20 ? 'Как новая' : null],
     ['insurance', 'Вторая верёвка', 'Спасёт при одном обрыве. После подхвата: 20/20.', save.ropes === 2 ? 'Куплена' : null],
     ['helmet', `Каска · уровень ${save.helmetLevel}`, `Следующий уровень: ${Math.min(3, save.helmetLevel + 1)} удара за попытку.`, save.helmetLevel === 3 ? 'Максимум' : null],
-    ['squeegee', `Склиз · уровень ${save.squeegeeLevel}`, 'Шире полоса пены, быстрее финальная стяжка.', save.squeegeeLevel === 3 ? 'Максимум' : null]
+    ['squeegee', `Склиз · уровень ${save.squeegeeLevel}`, 'Шире полоса очистки — больше денег на ходу.', save.squeegeeLevel === 3 ? 'Максимум' : null]
   ];
   modal(`<span class="kicker">Подготовка к смене</span><h2 id="panel-title">Снаряжение</h2><p class="shop-balance">В кошельке <b>${money(save.balance)}</b></p>
     ${rows.map(([id, title, text, tag]) => `<div class="shop-item"><div><b>${title}</b><p>${text}</p></div>${tag ? `<span class="tag">${tag}</span>` : `<button class="buy" id="buy-${id}" ${save.balance < priceFor(save, id) ? 'disabled' : ''} aria-label="Купить: ${title}, ${priceFor(save, id)} долларов">${money(priceFor(save, id))}</button>`}</div>`).join('')}
     <button class="primary" id="shop-start">${origin === 'home' ? 'На крышу ↗' : 'Следующий спуск ↗'}</button>
-    <button class="text-button" id="shop-back">На главный экран</button>
+    <button class="secondary" id="shop-profile">Мой альпинист · скины</button><button class="text-button" id="shop-back">На главный экран</button>
     <p class="note">Каска восстанавливается перед каждой попыткой. После потери последней верёвки выдаём базовую бесплатно.</p>`);
   for (const [id] of rows) if ($(`buy-${id}`)) action(`buy-${id}`, () => {
     if (state !== 'shop') return;
     const next = purchase(save, id);
-    persist(next, () => { haptic(); showShop(origin); }, 'Сохраняем покупку…');
+    persist(next, () => { haptic(); sound.effect('buy'); showShop(origin); }, 'Сохраняем покупку…');
   });
-  action('shop-start', startRun); action('shop-back', home);
+  action('shop-profile', () => showProfile()); action('shop-start', startRun); action('shop-back', home);
+}
+
+function drawProfilePortrait() {
+  const portrait = $('portrait');
+  if (!portrait) return;
+  const g = portrait.getContext('2d');
+  g.setTransform(2,0,0,2,0,0); g.clearRect(0,0,280,180);
+  const glow = g.createLinearGradient(0,0,280,180); glow.addColorStop(0,'#335f59'); glow.addColorStop(1,'#203b43');
+  g.fillStyle=glow; g.beginPath(); g.roundRect(0,0,280,180,18); g.fill();
+  g.strokeStyle='#90b8a329'; g.lineWidth=1;
+  for (let x=20;x<280;x+=30) { g.beginPath();g.moveTo(x,0);g.lineTo(x,180);g.stroke(); }
+  for (let y=15;y<180;y+=30) { g.beginPath();g.moveTo(0,y);g.lineTo(280,y);g.stroke(); }
+  g.strokeStyle='#dfd294';g.lineWidth=2;g.beginPath();g.moveTo(110,0);g.lineTo(143,130);g.stroke();
+  if(save.ropes===2) {g.strokeStyle='#e79b77';g.beginPath();g.moveTo(167,0);g.lineTo(157,130);g.stroke();}
+  drawClimber(g,{x:148,y:90,zoom:1.55,skinId:previewSkin,equipment:save,helmet:true,time:0,washing:false});
+  g.fillStyle='#d9ee86';g.font='600 9px system-ui';g.textAlign='left';g.fillText('PROMALP / CREW',14,23);
+  g.fillStyle='#b8cdbb';g.font='9px system-ui';g.fillText(save.ropes===2?'ДВОЙНАЯ СТРАХОВКА':'ГОТОВ К ВЫХОДУ',14,166);
+}
+function showProfile(id = save.equippedSkin) {
+  previewSkin = id; state = 'profile'; updateHUD();
+  const skin = SKINS.find(item => item.id === id) || SKINS[0];
+  const owned = save.ownedSkins.includes(skin.id), equipped = save.equippedSkin === skin.id;
+  modal(`<span class="kicker">Личное дело · высотная бригада</span>
+    <div class="profile-title"><h2 id="panel-title">Мой альпинист</h2><span>${money(save.balance)}</span></div>
+    <canvas id="portrait" width="560" height="360" aria-label="Примерка образа ${skin.name} с вашим снаряжением"></canvas>
+    <div class="identity"><strong id="profile-name">Высотник</strong><span>${equipped ? 'На смене' : 'Примерка'} · ${skin.name}</span></div>
+    <div class="kit-slots"><div><i>⌁</i><b>${save.ropes === 2 ? 'Две верёвки' : 'Верёвка'}</b><small>${save.ropeDurability}/20 · ${save.ropes === 2 ? 'страховка есть' : 'без страховки'}</small></div><div><i>◒</i><b>Каска Lv.${save.helmetLevel}</b><small>${save.helmetLevel} ${save.helmetLevel === 1 ? 'удар' : 'удара'}</small></div><div><i>⊤</i><b>Склиз Lv.${save.squeegeeLevel}</b><small>${['','Стандарт','Широкий','Профи'][save.squeegeeLevel]}</small></div></div>
+    <div class="wardrobe-heading"><b>Гардероб</b><span>${save.ownedSkins.length} / ${SKINS.length} образа</span></div>
+    <div class="skin-grid">${SKINS.map(item => `<button class="skin-card ${item.id === skin.id ? 'selected' : ''}" id="skin-${item.id}" aria-pressed="${item.id === skin.id}" aria-label="Примерить: ${item.name}"><canvas id="thumb-${item.id}" width="140" height="150" aria-hidden="true"></canvas><b>${item.name}</b><small>${item.id === save.equippedSkin ? 'Надет ✓' : save.ownedSkins.includes(item.id) ? 'Куплен' : money(item.price)}</small></button>`).join('')}</div>
+    <p class="skin-description">${skin.subtitle}. Скины меняют внешность, а не характеристики.</p>
+    <button class="primary" id="skin-action" ${equipped || (!owned && save.balance < skin.price) ? 'disabled' : ''}>${equipped ? 'Этот образ надет ✓' : owned ? 'Надеть образ' : save.balance < skin.price ? `Не хватает ${money(skin.price-save.balance)}` : `Купить и надеть · ${money(skin.price)}`}</button>
+    <button class="secondary" id="profile-gear">Улучшить снаряжение</button><button class="text-button" id="profile-back">На главный экран</button>`, 'profile-panel');
+  $('profile-name').textContent = tg?.initDataUnsafe?.user?.first_name || 'Высотник';
+  drawProfilePortrait();
+  for (const item of SKINS) {
+    const g = $(`thumb-${item.id}`).getContext('2d');g.setTransform(2,0,0,2,0,0);
+    drawClimber(g,{x:39,y:34,zoom:.64,skinId:item.id,equipment:save,helmet:true});
+    action(`skin-${item.id}`, () => showProfile(item.id));
+  }
+  action('skin-action', () => {
+    if(state !== 'profile' || equipped || (!owned && save.balance < skin.price)) return;
+    persist(owned ? equipSkin(save,skin.id) : buySkin(save,skin.id), () => {haptic();sound.effect('buy');showProfile(skin.id);}, owned ? 'Надеваем образ…' : 'Сохраняем новый образ…');
+  });
+  action('profile-gear', () => showShop('home')); action('profile-back',home);
 }
 
 // A failed write retries exactly the same snapshot, never re-applies a reward/purchase.
-async function persist(next, onSuccess, title = 'Сохраняем снаряжение…') {
-  state = 'saving'; releasePointer(); updateHUD();
+async function persist(next, onSuccess, title = 'Сохраняем снаряжение…', keepPointer = false) {
+  state = 'saving'; if (!keepPointer) releasePointer(); updateHUD();
   $('hint').textContent = title;
   if (!$('overlay').hidden) modal(`<span class="kicker">Сохранение</span><h2 id="panel-title">${title}</h2><p class="description loading-dot">Секунду, закрепляем результат.</p>`);
   try {
@@ -132,22 +184,23 @@ async function persist(next, onSuccess, title = 'Сохраняем снаряж
   }
 }
 function completeFloor() {
-  if (state !== 'wiping' && state !== 'playing') return;
+  if (state !== 'playing') return;
   const outcome = descend(save);
-  hazards = []; releasePointer();
+  floorHistory[floorIndex] = panes;
   persist(outcome.save, () => {
     closeModal();
     if (outcome.event === 'fall') { fall('Верёвка оборвалась. Выдали новую — за наш счёт.'); return; }
     if (outcome.event === 'caught') { toast('Страховка поймала! Осталась одна верёвка.', 4); haptic('heavy'); }
-    state = 'descending'; transition = 0;
-    $('hint').textContent = outcome.event === 'caught' ? 'Страховка сработала. Продолжаем!' : 'Этаж готов. Спускаемся ниже…';
-  });
+    floorIndex++; camera = floorIndex * stride();
+    if (floorIndex >= RULES.floors) { releasePointer(); finishRun(); }
+    else { createPanes(); state = 'playing'; invulnerable = Math.max(invulnerable, .7); updateHUD(); $('hint').textContent = controlHint; }
+  }, 'Закрепляем верёвку…', true);
 }
 let fallReason = '';
 function fall(reason) {
   state = 'falling'; fallTime = 0; fallReason = reason; earned = 0; hazards = []; releasePointer();
   $('hint').textContent = 'Срыв! Заработок за спуск потерян.';
-  updateHUD(); haptic('heavy');
+  updateHUD(); haptic('heavy'); sound.effect('fall');
 }
 function fallenScreen() {
   state = 'fallen';
@@ -166,31 +219,40 @@ function fallenScreen() {
 function finishRun() {
   state = 'finished'; updateHUD();
   $('hint').hidden = true;
-  modal(`<span class="kicker">Все 18 окон сияют</span><h2 id="panel-title">Чистая работа!</h2><p class="description">Обе ноги на земле. Осталось сдать объект — и деньги твои.</p><div class="big-number">${money(earned)}</div><button class="primary" id="submit">Сдать объект · ${money(earned)}</button><p class="note">Зачислим в кошелёк и сохраним прогресс.</p>`);
+  modal(`<span class="kicker">Все 6 этажей позади</span><h2 id="panel-title">Чистая работа!</h2><p class="description">Обе ноги на земле. Оплата за очищенную площадь — твоя после сдачи объекта.</p><div class="big-number">${money(earned)}</div><button class="primary" id="submit">Сдать объект · ${money(earned)}</button><p class="note">Зачислим в кошелёк и сохраним прогресс.</p>`);
   action('submit', () => {
     if (state !== 'finished') return;
     const amount = earned;
     persist(deposit(save, amount), () => {
-      earned = 0; updateHUD(); haptic('medium');
+      earned = 0; updateHUD(); haptic('medium'); sound.effect('finish');
       try { if (tg?.isVersionAtLeast('6.2')) tg.disableClosingConfirmation(); } catch { /* optional */ }
       showShop('completed'); toast(`Объект сдан. +${money(amount)} в кошельке!`, 4);
     }, 'Зачисляем заработок…');
   });
 }
 function pause() {
-  if (!['playing', 'wiping', 'paused'].includes(state)) return;
-  if (state === 'paused') { state = previousState; closeModal(); updateHUD(); return; }
-  previousState = state; state = 'paused'; releasePointer(); updateHUD();
+  if (!['playing', 'paused'].includes(state)) return;
+  if (state === 'paused') { heldKeys.clear(); state = previousState; closeModal(); updateHUD(); return; }
+  heldKeys.clear(); previousState = state; state = 'paused'; releasePointer(); updateHUD();
   modal(`<span class="kicker">Небольшой перекур</span><h2 id="panel-title">Висим. Отдыхаем.</h2><p class="description">Чайки тоже подождут. Намыто за спуск: ${money(earned)}.</p><button class="primary" id="resume">Продолжить</button><button class="secondary" id="quit">Завершить попытку</button>`);
   action('resume', pause); action('quit', () => {
     modal(`<h2 id="panel-title">Закончить спуск?</h2><p class="description">Несданный заработок ${money(earned)} пропадёт. Износ верёвки останется.</p><button class="primary" id="keep-playing">Продолжить работу</button><button class="secondary" id="confirm-quit">Уйти на главный экран</button>`);
     action('keep-playing', pause); action('confirm-quit', home);
   });
 }
+function updateSoundButton() {
+  $('sound-button').textContent = sound.enabled ? '♫' : '♪̸';
+  $('sound-button').setAttribute('aria-label', sound.enabled ? 'Выключить музыку и звуки' : 'Включить музыку и звуки');
+  $('sound-button').setAttribute('aria-pressed', String(sound.enabled));
+}
+action('sound-button', async () => { await sound.toggle(); updateSoundButton(); if (!sound.supported) toast('Звук не поддерживается этим браузером.'); });
+updateSoundButton();
 action('pause', pause);
-document.addEventListener('visibilitychange', () => { if (document.hidden && ['playing', 'wiping'].includes(state)) pause(); });
-window.addEventListener('blur', () => { if (['playing', 'wiping'].includes(state)) pause(); });
-try { tg?.onEvent('deactivated', () => { if (['playing', 'wiping'].includes(state)) pause(); }); } catch { /* optional */ }
+action('profile-button', () => showProfile());
+window.addEventListener('pagehide', () => sound.update(state,true));
+document.addEventListener('visibilitychange', () => { sound.update(state,document.hidden); if (document.hidden && ['playing'].includes(state)) pause(); });
+window.addEventListener('blur', () => { if (['playing'].includes(state)) pause(); });
+try { tg?.onEvent('deactivated', () => { if (['playing'].includes(state)) pause(); }); } catch { /* optional */ }
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape') pause();
   if (event.key === 'Tab' && !$('overlay').hidden) {
@@ -203,40 +265,32 @@ document.addEventListener('keydown', event => {
 });
 function position(event) {
   const rect = canvas.getBoundingClientRect();
-  return { x: clamp((event.clientX - rect.left) / rect.width * W, 18, W - 18), y: clamp((event.clientY - rect.top) / rect.height * H, 110, H - 55) };
+  return { x: clamp((event.clientX - rect.left) / rect.width * W, 18, W - 18), y: playerLine() };
 }
 canvas.addEventListener('pointerdown', event => {
   if (state !== 'playing' || pointer !== null || (event.pointerType === 'mouse' && event.button !== 0)) return;
-  event.preventDefault(); pointer = event.pointerId; target = position(event); canvas.setPointerCapture(pointer);
-  applyStroke(target, target);
+  event.preventDefault(); sound.unlock(); pointer = event.pointerId; target = position(event); canvas.setPointerCapture(pointer);
 });
 canvas.addEventListener('pointermove', event => {
   if (event.pointerId !== pointer) return;
-  event.preventDefault(); const next = position(event); applyStroke(target, next); target = next;
+  event.preventDefault(); target = position(event);
 });
 function releasePointer() {
   const id = pointer; pointer = null;
   if (id !== null && canvas.hasPointerCapture(id)) canvas.releasePointerCapture(id);
 }
-canvas.addEventListener('pointerup', event => {
-  if (event.pointerId !== pointer) return;
-  releasePointer();
-  if (state !== 'playing') return;
-  let wiping = false;
-  for (const pane of panes) if (!pane.clean && pane.coverage === 1) { pane.wipe = 0; wiping = true; }
-  if (wiping) { state = 'wiping'; updateHUD(); haptic(); $('hint').textContent = 'Склиз идёт вниз. Красота!'; }
-});
-canvas.addEventListener('pointercancel', releasePointer);
+canvas.addEventListener('pointerup', event => { if (event.pointerId === pointer) releasePointer(); });
+canvas.addEventListener('pointercancel', event => { if (event.pointerId === pointer) releasePointer(); });
 canvas.addEventListener('lostpointercapture', releasePointer);
 
 function resize() {
-  const oldStride = stride(), oldTop = windowTop(), oldHeight = windowHeight();
+  const oldStride = stride();
   const rect = canvas.getBoundingClientRect();
   H = W * rect.height / rect.width; scale = Math.min(devicePixelRatio || 1, 2) * rect.width / W;
   canvas.width = Math.round(W * scale); canvas.height = Math.round(H * scale);
   camera *= stride() / oldStride;
-  for (const pane of panes) { pane.y = windowTop(); pane.h = windowHeight(); }
-  player.y = clamp(windowTop() + (player.y - oldTop) / oldHeight * windowHeight(), 110, H - 55);
+  for (const pane of [...panes, ...floorHistory.flat()]) { pane.y = windowTop(); pane.h = windowHeight(); }
+  player.y = playerLine();
   target = { ...player }; releasePointer();
 }
 new ResizeObserver(resize).observe(canvas);
@@ -266,17 +320,12 @@ function drawWindow(x, y, w, h, pane, floor) {
     ctx.fillStyle = '#e9f5db55'; ctx.beginPath(); ctx.moveTo(x + 8, y); ctx.lineTo(x + 40, y); ctx.lineTo(x + w - 8, y + h); ctx.lineTo(x + w - 38, y + h); ctx.fill();
   }
   if (pane && !clean) {
-    const wipeY = pane.wipe < 0 ? y : y + pane.wipe * h;
-    if (pane.wipe >= 0) { rect(x, y, w, pane.wipe * h, '#9fd4d2'); path([[x + 8, y], [x + w * .55, wipeY]], '#e3f0d850', 15); }
     for (let row = 0; row < 18; row++) for (let col = 0; col < 12; col++) {
       if (!pane.foam[row * 12 + col]) continue;
       const fy = y + row * h / 18;
-      if (fy + h / 18 < wipeY) continue;
-      rect(x + col * w / 12 - .3, Math.max(fy - .3, wipeY), w / 12 + .6, Math.max(0, fy + h / 18 + .6 - Math.max(fy - .3, wipeY)), (row + col) % 4 === 0 ? '#f8f7e9' : '#e4eee5', 3);
-      if ((row * 3 + col) % 7 === 0) circle(x + (col + .5) * w / 12, Math.max(fy + 4, wipeY + 3), 2, '#c7ddd3');
-    }
-    if (pane.wipe >= 0) {
-      rect(x - 3, wipeY - 4, w + 6, 7, '#233c39', 2); rect(x + w / 2 - 3, wipeY - 4, 6, 23, '#e8b565', 3);
+      rect(x + col * w / 12, fy, w / 12 + .5, h / 18 + .5, (row + col) % 5 === 0 ? '#afe0d9' : '#91cdcf');
+      // Foam stays near the moving squeegee; clear blue glass is left behind.
+      if (state === 'playing' && Math.abs(fy - player.y) < 9) circle(x + (col + .5) * w / 12, fy, 4, '#f0f6e4');
     }
   }
   ctx.restore();
@@ -309,7 +358,7 @@ function drawScene() {
     if (f >= 0 && f < 6) {
       for (let i = 0; i < 3; i++) {
         const active = f === floorIndex && !['home', 'loading', 'load-error'].includes(state);
-        const p = active ? panes[i] : f < floorIndex ? { clean: true } : null;
+        const p = active ? panes[i] : floorHistory[f]?.[i] || null;
         drawWindow(34 + i * 114, y, 104, windowHeight(), p, f);
       }
       rect(2, y + 12, 24, 31, '#284d43', 4); label(String(6 - f).padStart(2, '0'), 14, y + 33, 11, '#d9dfbc');
@@ -334,38 +383,19 @@ function drawScene() {
   for (let j = 0; j < 12; j++) { const y = H - j * 13; circle(10 + Math.sin(j * 2) * 7, y, 9, j % 2 ? '#4e7859' : '#668956'); }
 }
 function drawPlayer() {
-  let x = player.x - 13, y = player.y + 30;
+  let x = player.x - 13, y = player.y + 40;
   if (state === 'falling') y += fallTime * fallTime * 700;
   if (state === 'fallen') return;
-  const homeMode = ['home', 'loading', 'load-error'].includes(state);
+  const homeMode = ['home', 'loading', 'load-error', 'profile', 'shop'].includes(state);
   if (homeMode) { x = 280; y = H * .23 + Math.sin(time * 1.5) * 3; }
   if (invulnerable > 0 && Math.floor(time * 12) % 2 === 0 && !homeMode) ctx.globalAlpha = .6;
-  const sway = reducedMotion ? 0 : Math.sin(time * 2.4) * 3;
   if (state !== 'falling') {
     path([[180, -20], [x - 5, y + 23]], '#435844', 3);
     path([[180, -20], [x - 5, y + 23]], '#e3ca76', 1.4);
     if (save.ropes === 2) path([[224, -20], [x + 12, y + 25]], '#d5815a', 2.5);
   }
-  ctx.save(); ctx.translate(x, y); ctx.rotate(sway / 100);
-  // Boots, bent knees, work jacket and harness.
-  path([[-8, 22], [-18, 42], [-5, 51]], '#264a4a', 12); path([[9, 22], [19, 37], [27, 48]], '#315957', 12);
-  path([[-8, 51], [2, 52]], '#173f3d', 9); path([[23, 48], [33, 48]], '#173f3d', 9);
-  rect(-16, -8, 32, 37, '#e5a14e', 9); rect(-16, 3, 32, 5, '#f4d07b', 1);
-  path([[-11, -4], [-3, 22], [10, -4]], '#31524a', 4); path([[-15, 23], [15, 23]], '#31524a', 5); circle(0, 22, 4, '#d6dcaa');
-  path([[-13, 0], [-28, 7], [-31, -10]], '#e9b26a', 9);
-  path([[13, 0], [25, -13], [13, -26]], '#e9b26a', 9);
-  circle(13, -27, 5, '#f3c897'); circle(-31, -12, 5, '#f3c897');
-  circle(0, -20, 12, '#f0c38e'); rect(-12, -26, 8, 10, '#654b3c', 3);
-  circle(6, -21, 1.6, '#294b42'); path([[7, -14], [3, -13]], '#996a4e', 1.3);
-  if (helmetHits > 0 || homeMode) {
-    ctx.fillStyle = '#f3c85b'; ctx.beginPath(); ctx.arc(0, -26, 15, Math.PI, 0); ctx.fill(); rect(-17, -28, 35, 5, '#f6d775', 2); path([[0, -40], [0, -30]], '#d89b42', 2);
-  }
-  // Bucket and a little foam on the tool.
-  path([[-24, 21], [-27, 10], [-35, 10], [-38, 22]], '#c4cfb1', 2); rect(-42, 19, 21, 23, '#547f78', 4); rect(-44, 18, 25, 5, '#a0c0a4', 2);
-  const toolWidth = 20 + save.squeegeeLevel * 8;
-  path([[13, -25], [13, -38]], '#b88a51', 4); rect(13 - toolWidth / 2, -42, toolWidth, 7, '#375b53', 2);
-  if (pointer !== null) for (let j = 0; j < 5; j++) circle(13 - toolWidth / 2 + 4 + j * (toolWidth - 8) / 4, -43, 4, '#eef2df');
-  ctx.restore(); ctx.globalAlpha = 1;
+  drawClimber(ctx, {x,y,skinId:save.equippedSkin,equipment:save,helmet:helmetHits>0 || homeMode,time:reducedMotion ? 0 : time,washing:state==='playing'});
+  ctx.globalAlpha = 1;
 }
 function drawHazards() {
   for (const hazard of hazards) {
@@ -386,75 +416,60 @@ function spawnHazard() {
   const aimed = Math.random() < .65;
   hazards.push({ type: Math.random() < .55 ? 'brick' : 'gull', x: clamp(aimed ? player.x - 13 + (Math.random() - .5) * 38 : 30 + Math.random() * 340, 26, 374), y: -25, warning: 1.35, speed: 115 + floorIndex * 12 + Math.random() * 30, spin: 0 });
 }
-function applyStroke(from, to) {
-  const steps = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / 7));
+function washAlong(from, to, fromCamera, toCamera) {
+  const distance = Math.hypot(to.x - from.x, toCamera - fromCamera);
+  const steps = Math.max(1, Math.ceil(distance / 6));
   for (let step = 1; step <= steps; step++) {
     const x = from.x + (to.x - from.x) * step / steps;
-    const y = from.y + (to.y - from.y) * step / steps;
+    const y = playerLine() + fromCamera + (toCamera - fromCamera) * step / steps - floorIndex * stride();
     for (const pane of panes) if (!pane.clean) {
-      const wasFull = pane.coverage === 1;
-      pane.coverage = paintFoam(pane.foam, pane, x, y, 21 + save.squeegeeLevel * 7);
-      if (!wasFull && pane.coverage === 1) { haptic(); toast('100%! Отпусти — и окно засияет.', 2); }
+      pane.coverage = paintFoam(pane.foam, pane, x, y, 49 + save.squeegeeLevel * 8);
+      pane.clean = pane.coverage === 1;
     }
   }
+  for (const pane of panes) {
+    const nextReward = windowReward(pane.coverage);
+    if (nextReward > pane.reward) { const before = Math.floor(earned / 5); earned += nextReward - pane.reward; if (Math.floor(earned / 5) > before) sound.effect('coin'); pane.reward = nextReward; updateHUD(); }
+  }
 }
+const heldKeys = new Set();
+document.addEventListener('keydown', event => {
+  if (state === 'playing' && ['ArrowLeft','ArrowRight','a','d','A','D'].includes(event.key)) { event.preventDefault(); heldKeys.add(event.key.toLowerCase()); }
+});
+document.addEventListener('keyup', event => heldKeys.delete(event.key.toLowerCase()));
+window.addEventListener('blur', () => heldKeys.clear());
 function update(dt) {
-  if (document.hidden && ['playing', 'wiping'].includes(state)) pause();
+  if (document.hidden && state === 'playing') pause();
+  sound.update(state,Boolean(document.hidden));
   time += dt;
   if (time > toastUntil) $('toast').classList.remove('visible');
   if (state === 'playing') {
-    const lerp = 1 - Math.exp(-20 * dt);
-    player.x += (target.x - player.x) * lerp; player.y += (target.y - player.y) * lerp;
-  }
-  if (state === 'wiping') {
-    let active = false;
-    for (const pane of panes) if (pane.wipe >= 0 && !pane.clean) {
-      pane.wipe += dt * (.7 + save.squeegeeLevel * .35);
-      if (pane.wipe >= 1) {
-        pane.clean = true; pane.wipe = 1; earned += RULES.windowPay; updateHUD();
-        sparks.push({ x: pane.x + pane.w / 2, y: pane.y + pane.h / 2, life: 1 });
-      } else active = true;
-    }
-    if (!active) {
-      if (panes.every(pane => pane.clean)) completeFloor();
-      else { state = 'playing'; $('hint').textContent = 'Води по стеклу → отпусти, когда будет 100%'; updateHUD(); }
-    }
-  }
-  // Hazards pause during the short automatic wipe: the player cannot drag then.
-  if (state === 'playing') {
+    const before = {...player}, beforeCamera = camera;
+    const left = heldKeys.has('arrowleft') || heldKeys.has('a'), right = heldKeys.has('arrowright') || heldKeys.has('d');
+    if (left !== right) target.x = clamp(target.x + (right ? 1 : -1) * dt * 270, 18, W - 18);
+    player.x += (target.x - player.x) * (1 - Math.exp(-14 * dt)); player.y = playerLine();
+    camera = Math.min((floorIndex + 1) * stride(), camera + RULES.descentSpeed * dt);
+    washAlong(before, player, beforeCamera, camera);
     invulnerable = Math.max(0, invulnerable - dt); nextHazard -= dt;
-    if (nextHazard <= 0) { spawnHazard(); nextHazard = 4.6 + Math.random() * 2.8 - floorIndex * .25; }
+    if (nextHazard <= 0) { spawnHazard(); nextHazard = 5.5 + Math.random() * 2.8 - floorIndex * .25; }
     for (const hazard of hazards) {
       if (hazard.warning > 0) { hazard.warning -= dt; continue; }
       hazard.y += hazard.speed * dt; hazard.spin += dt * 3;
-      if (invulnerable <= 0 && Math.abs(hazard.x - (player.x - 13)) < 27 && Math.abs(hazard.y - (player.y + 30)) < 40) {
+      if (invulnerable <= 0 && Math.abs(hazard.x - (player.x - 13)) < 27 && Math.abs(hazard.y - (player.y + 40)) < 40) {
         hazard.y = H + 100; invulnerable = 2;
-        if (helmetHits > 0) { helmetHits--; haptic('heavy'); toast(helmetHits ? `Каска спасла. Осталось ударов: ${helmetHits}` : 'Каска слетела! Следующий удар — падение.', 3); updateHUD(); }
+        if (helmetHits > 0) { helmetHits--; haptic('heavy'); sound.effect('hit'); toast(helmetHits ? `Каска спасла. Осталось ударов: ${helmetHits}` : 'Каска слетела! Следующий удар — падение.', 3); updateHUD(); }
         else { fall('Не удалось увернуться от удара без каски.'); break; }
       }
     }
     hazards = hazards.filter(hazard => hazard.y < H + 70);
-  }
-  if (state === 'descending') {
-    transition = Math.min(1, transition + dt / (reducedMotion ? .15 : 1));
-    const ease = transition * transition * (3 - 2 * transition);
-    camera = (floorIndex + ease) * stride();
-    player.y += (windowTop() - 40 - player.y) * (1 - Math.exp(-5 * dt));
-    if (transition >= 1) {
-      floorIndex++; camera = floorIndex * stride();
-      if (floorIndex >= 6) finishRun();
-      else { createPanes(); state = 'playing'; target = { ...player }; nextHazard = 3.5; invulnerable = 1; updateHUD(); $('hint').textContent = 'Води по стеклу → отпусти, когда будет 100%'; }
-    }
+    if (state === 'playing' && camera >= (floorIndex + 1) * stride()) completeFloor();
   }
   if (state === 'falling') { fallTime += dt; if (fallTime > .85) fallenScreen(); }
-  if (!['paused', 'saving', 'save-error'].includes(state)) for (const spark of sparks) { spark.life -= dt; spark.y -= dt * 25; }
-  sparks = sparks.filter(spark => spark.life > 0);
 }
 function frame(now) {
   const dt = Math.min((now - (lastFrame || now)) / 1000, .04); lastFrame = now;
   update(dt); ctx.setTransform(scale, 0, 0, scale, 0, 0); ctx.clearRect(0, 0, W, H);
   drawScene(); drawHazards(); drawPlayer();
-  for (const spark of sparks) { ctx.globalAlpha = spark.life; label('+$10', spark.x, spark.y, 22, '#f4ffd3', 'center', 800); ctx.globalAlpha = 1; }
   requestAnimationFrame(frame);
 }
 async function boot() {
@@ -462,7 +477,7 @@ async function boot() {
   modal('<span class="kicker">Промальп · Стекломой</span><h2 id="panel-title">Готовим верёвки…</h2><p class="description loading-dot">Проверяем снаряжение и сохранения.</p>');
   try {
     save = await storage.load();
-    $('storage-label').textContent = storage.mode === 'cloud' ? 'Прогресс сохраняется в Telegram' : 'Браузерная версия · отдельное сохранение на этом устройстве';
+    $('storage-label').textContent = storage.mode === 'cloud' ? 'v2 · Прогресс сохраняется в Telegram' : 'v2 · Браузерная версия · отдельное сохранение';
     home();
   } catch {
     state = 'load-error';

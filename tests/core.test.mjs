@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_SAVE, parseSave, purchase, descend, deposit, createFoam, paintFoam } from '../core.mjs';
+import { DEFAULT_SAVE, parseSave, purchase, descend, deposit, createFoam, paintFoam, buySkin, equipSkin, windowReward } from '../core.mjs';
 import { createStorage } from '../storage.mjs';
 
 test('missing save starts fresh; corrupt data is rejected without resetting', () => {
@@ -74,4 +74,22 @@ test('cloud false result and timeout reject; same snapshot retry is idempotent',
 test('unsupported Telegram cannot silently use local storage', async () => {
   const store = createStorage({ initData: 'test', isVersionAtLeast: () => false }, fakeLocal());
   assert.equal(store.mode, 'cloud'); await assert.rejects(store.load(), /Обновите/);
+});
+
+test('legacy save migration preserves money, wear and upgrades and adds a free worker skin',()=>{
+  const legacy={balance:321,ropes:2,ropeDurability:7,helmetLevel:3,squeegeeLevel:2};
+  const migrated=parseSave(JSON.stringify(legacy));
+  for(const key of Object.keys(legacy))assert.equal(migrated[key],legacy[key]);
+  assert.deepEqual(migrated.ownedSkins,['worker']);assert.equal(migrated.equippedSkin,'worker');
+});
+test('skin ownership validates and purchases cannot duplicate, overspend or equip unowned skins',()=>{
+  const initial={...DEFAULT_SAVE,balance:400};const bought=buySkin(initial,'neon');
+  assert.equal(bought.balance,280);assert.equal(bought.equippedSkin,'neon');assert.deepEqual(initial.ownedSkins,['worker']);
+  assert.throws(()=>buySkin(bought,'neon'));assert.throws(()=>buySkin(DEFAULT_SAVE,'foam'));assert.throws(()=>equipSkin(initial,'neon'));
+  assert.equal(equipSkin(bought,'worker').balance,280);
+  assert.throws(()=>parseSave({...initial,ownedSkins:['worker','unknown']}));
+  assert.throws(()=>parseSave({...initial,equippedSkin:'foam'}));
+});
+test('partial cleaning pays proportionally, never more than a complete pane',()=>{
+  assert.equal(windowReward(0),0);assert.equal(windowReward(.5),5);assert.equal(windowReward(1),10);assert.throws(()=>windowReward(2));
 });

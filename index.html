@@ -7,26 +7,28 @@
   <meta name="description" content="Мой окна, уворачивайся от чаек и кирпичей, сдавай объекты и улучшай снаряжение. Промальп: Стекломой — маленькая игра о большой высоте.">
   <title>Промальп · Стекломой</title>
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="./style.css">
+  <link rel="stylesheet" href="./style.css?v=2">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script type="module" src="./game.js"></script>
+  <script type="module" src="./game.js?v=2"></script>
 </head>
 <body>
   <main class="app">
     <header class="topbar">
       <a class="brand" href="./" aria-label="Промальп — главный экран"><span class="brand-icon">П</span><span>ПРОМАЛЬП<small>СТЕКЛОМОЙ</small></span></a>
       <div class="wallet"><span>В КОШЕЛЬКЕ</span><strong id="balance">$0</strong></div>
+      <button class="icon-button sound-button" id="sound-button" aria-label="Выключить музыку и звуки" aria-pressed="true">♫</button>
+      <button class="icon-button profile-button" id="profile-button" aria-label="Мой альпинист" disabled>♙</button>
       <button class="icon-button" id="pause" aria-label="Пауза" disabled>Ⅱ</button>
     </header>
     <section class="game-shell" aria-label="Игровая площадка">
-      <canvas id="game" aria-label="Фасад здания. Удерживайте палец или мышь и водите по окнам, чтобы нанести пену. Отпустите, чтобы смыть её."></canvas>
+      <canvas id="game" aria-label="Альпинист спускается автоматически. Двигайте палец или мышь влево-вправо, чтобы мыть окна и уклоняться. Стрелки на клавиатуре тоже работают."></canvas>
       <div class="run-hud" id="run-hud" hidden>
         <div><span class="eyebrow">ОБЪЕКТ 01 · ТИХИЙ ДВОР</span><strong id="floor">Этаж 6 / 6</strong></div>
         <div class="run-money"><span>Намыто за спуск</span><strong id="earned">$0</strong></div>
       </div>
       <div class="floor-progress" id="floor-progress" hidden aria-label="Прогресс объекта"></div>
       <div class="toast" id="toast" role="status" aria-live="polite"></div>
-      <div class="hint" id="hint" hidden>Води по стеклу → отпусти, когда будет 100%</div>
+      <div class="hint" id="hint" hidden>Води влево-вправо · мой окна на ходу</div>
       <div class="overlay" id="overlay">
         <section class="panel" id="panel" role="dialog" aria-modal="true" aria-labelledby="panel-title"></section>
       </div>
